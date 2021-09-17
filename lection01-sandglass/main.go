@@ -30,14 +30,14 @@ func (color Color) String() string {
 }
 
 const (
-	colorReset  = Color(iota)
-	colorRed    = Color(iota)
-	colorGreen  = Color(iota)
-	colorYellow = Color(iota)
-	colorBlue   = Color(iota)
-	colorPurple = Color(iota)
-	colorCyan   = Color(iota)
-	colorWhite  = Color(iota)
+	colorReset = Color(iota)
+	colorRed
+	colorGreen
+	colorYellow
+	colorBlue
+	colorPurple
+	colorCyan
+	colorWhite
 )
 
 type Sandglass [5]int
