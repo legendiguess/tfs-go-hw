@@ -43,7 +43,7 @@ const (
 type Sandglass [5]int
 
 func newSandglass() Sandglass {
-	return Sandglass([5]int{15, int('⨯'), int(colorYellow), '·', int(colorCyan)})
+	return Sandglass{int(Size(15)), int('⨯'), int(colorYellow), int('·'), int(colorCyan)}
 }
 
 func (sandglass Sandglass) size(newSize Size) Sandglass {
