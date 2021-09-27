@@ -126,6 +126,26 @@ func unmarshalledToValid(unmarshalledOperations []UnmarshalledOperation) ([]Oper
 			continue
 		}
 
+		var uncheckedCreatedAt = unmarshalled.CreatedAt
+
+		if uncheckedCreatedAt == "" {
+			var dt = unmarshalled.getFromInnerBody("created_at")
+			if dt != nil {
+				uncheckedCreatedAt = dt.(string)
+			}
+		}
+
+		if uncheckedCreatedAt != "" {
+			t, err := time.Parse(time.RFC3339, uncheckedCreatedAt)
+			if err != nil {
+				continue
+			} else {
+				operation.CreatedAt = t
+			}
+		} else {
+			continue
+		}
+
 		var uncheckedType = unmarshalled.Type
 
 		if uncheckedType == "" {
@@ -136,9 +156,9 @@ func unmarshalledToValid(unmarshalledOperations []UnmarshalledOperation) ([]Oper
 		}
 
 		switch uncheckedType {
-		case "income", "outcome":
+		case "income", "+":
 			operation.Type = Income
-		case "+", "-":
+		case "outcome", "-":
 			operation.Type = Outcome
 		default:
 			notValidOperationsIds = append(notValidOperationsIds, InvalidOperation{Company: operation.Company, ID: operation.ID})
@@ -182,26 +202,6 @@ func unmarshalledToValid(unmarshalledOperations []UnmarshalledOperation) ([]Oper
 			}
 		} else {
 			notValidOperationsIds = append(notValidOperationsIds, InvalidOperation{Company: operation.Company, ID: operation.ID})
-			continue
-		}
-
-		var uncheckedCreatedAt = unmarshalled.CreatedAt
-
-		if uncheckedCreatedAt == "" {
-			var dt = unmarshalled.getFromInnerBody("created_at")
-			if dt != nil {
-				uncheckedCreatedAt = dt.(string)
-			}
-		}
-
-		if uncheckedCreatedAt != "" {
-			t, err := time.Parse(time.RFC3339, uncheckedCreatedAt)
-			if err != nil {
-				continue
-			} else {
-				operation.CreatedAt = t
-			}
-		} else {
 			continue
 		}
 
