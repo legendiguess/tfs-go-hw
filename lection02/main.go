@@ -57,7 +57,7 @@ const (
 	Outcome
 )
 
-type UnmarshalledOperation struct {
+type RawOperation struct {
 	Company   string
 	Type      string
 	Value     interface{}
@@ -66,13 +66,47 @@ type UnmarshalledOperation struct {
 	InnerBody map[string]interface{} `json:"operation"`
 }
 
-func (unmarshalledOperation UnmarshalledOperation) getFromInnerBody(fieldName string) interface{} {
-	if len(unmarshalledOperation.InnerBody) > 0 {
-		if val, ok := unmarshalledOperation.InnerBody[fieldName]; ok {
+func (rawOperation RawOperation) getFromInnerBody(fieldName string) interface{} {
+	if len(rawOperation.InnerBody) > 0 {
+		if val, ok := rawOperation.InnerBody[fieldName]; ok {
 			return val
 		}
 	}
 	return nil
+}
+
+func (rawOperation RawOperation) getValue() interface{} {
+	if rawOperation.Value == nil {
+		return rawOperation.getFromInnerBody("value")
+	}
+	return rawOperation.Value
+}
+
+func (rawOperation RawOperation) getID() interface{} {
+	if rawOperation.ID == nil {
+		return rawOperation.getFromInnerBody("id")
+	}
+	return rawOperation.ID
+}
+
+func (rawOperation RawOperation) getType() string {
+	if rawOperation.Type == "" {
+		var typeFromInner = rawOperation.getFromInnerBody("type")
+		if typeFromInner != nil {
+			return typeFromInner.(string)
+		}
+	}
+	return rawOperation.Type
+}
+
+func (rawOperation RawOperation) getCreatedAt() string {
+	if rawOperation.CreatedAt == "" {
+		var createdAt = rawOperation.getFromInnerBody("created_at")
+		if createdAt != nil {
+			return createdAt.(string)
+		}
+	}
+	return rawOperation.CreatedAt
 }
 
 type Operation struct {
@@ -83,132 +117,128 @@ type Operation struct {
 	CreatedAt time.Time
 }
 
+type OperationStatus int
+
+const (
+	Valid = iota
+	Invalid
+	Skip
+)
+
+func floatIsInteger(value float64) bool {
+	return value == float64(int(value))
+}
+
+func rawIDToValid(value interface{}) (interface{}, bool) {
+	if value != nil {
+		id, ok := value.(float64)
+		if !ok {
+			id, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			return id, true
+		}
+		if !floatIsInteger(id) {
+			return nil, false
+		}
+		return int(id), true
+	}
+	return nil, false
+}
+
+func rawTimeToValid(input string) (time.Time, bool) {
+	if input != "" {
+		t, err := time.Parse(time.RFC3339, input)
+		return t, err == nil
+	}
+	return time.Time{}, false
+}
+
+func rawValueToValid(input interface{}) (int, bool) {
+	if input != nil {
+		value, ok := input.(float64)
+		if !ok {
+			str, ok := input.(string)
+			if !ok {
+				return 0, false
+			}
+			var err error
+			value, err = strconv.ParseFloat(str, 64)
+			if err != nil {
+				return 0, false
+			}
+		}
+		return int(value), floatIsInteger(value)
+	}
+	return 0, false
+}
+
+func rawTypeToValid(input string) (OperationType, bool) {
+	switch input {
+	case "income", "+":
+		return Income, true
+	case "outcome", "-":
+		return Outcome, true
+	}
+	return OperationType(-1), false
+}
+
+func newOperationFromRaw(rawOperation RawOperation) (*Operation, OperationStatus) {
+	var operation = Operation{}
+
+	if rawOperation.Company != "" {
+		operation.Company = rawOperation.Company
+	} else {
+		return nil, Skip
+	}
+
+	id, ok := rawIDToValid(rawOperation.getID())
+	if !ok {
+		return nil, Skip
+	}
+	operation.ID = id
+
+	time, ok := rawTimeToValid(rawOperation.getCreatedAt())
+	if !ok {
+		return nil, Skip
+	}
+	operation.CreatedAt = time
+
+	mType, ok := rawTypeToValid(rawOperation.getType())
+	if !ok {
+		return &operation, Invalid
+	}
+	operation.Type = mType
+
+	value, ok := rawValueToValid(rawOperation.getValue())
+	if !ok {
+		return &operation, Invalid
+	}
+	operation.Value = value
+
+	return &operation, Valid
+}
+
 type InvalidOperation struct {
 	Company string
 	ID      interface{}
 }
 
-func unmarshalledToValid(unmarshalledOperations []UnmarshalledOperation) ([]Operation, []InvalidOperation) {
+func rawOperationsToValid(rawOperations []RawOperation) ([]Operation, []InvalidOperation) {
 	var operations []Operation
-	var notValidOperationsIds []InvalidOperation
+	var invalidOperations []InvalidOperation
 
-	for _, unmarshalled := range unmarshalledOperations {
-		var operation = Operation{}
-
-		if unmarshalled.Company != "" {
-			operation.Company = unmarshalled.Company
-		} else {
-			continue
+	for _, raw := range rawOperations {
+		operation, status := newOperationFromRaw(raw)
+		switch status {
+		case Valid:
+			operations = append(operations, *operation)
+		case Invalid:
+			invalidOperations = append(invalidOperations, InvalidOperation{Company: operation.Company, ID: operation.ID})
 		}
-
-		var uncheckedID interface{} = unmarshalled.ID
-		if uncheckedID == nil {
-			uncheckedID = unmarshalled.getFromInnerBody("id")
-		}
-
-		if uncheckedID != nil {
-			id, ok := uncheckedID.(float64)
-			if !ok {
-				id, ok := uncheckedID.(string)
-				if !ok {
-					continue
-				} else {
-					operation.ID = id
-				}
-			} else {
-				if id == float64(int(id)) {
-					operation.ID = int(id)
-				} else {
-					continue
-				}
-			}
-		} else {
-			continue
-		}
-
-		var uncheckedCreatedAt = unmarshalled.CreatedAt
-
-		if uncheckedCreatedAt == "" {
-			var dt = unmarshalled.getFromInnerBody("created_at")
-			if dt != nil {
-				uncheckedCreatedAt = dt.(string)
-			}
-		}
-
-		if uncheckedCreatedAt != "" {
-			t, err := time.Parse(time.RFC3339, uncheckedCreatedAt)
-			if err != nil {
-				continue
-			} else {
-				operation.CreatedAt = t
-			}
-		} else {
-			continue
-		}
-
-		var uncheckedType = unmarshalled.Type
-
-		if uncheckedType == "" {
-			var myType = unmarshalled.getFromInnerBody("type")
-			if myType != nil {
-				uncheckedType = myType.(string)
-			}
-		}
-
-		switch uncheckedType {
-		case "income", "+":
-			operation.Type = Income
-		case "outcome", "-":
-			operation.Type = Outcome
-		default:
-			notValidOperationsIds = append(notValidOperationsIds, InvalidOperation{Company: operation.Company, ID: operation.ID})
-			continue
-		}
-
-		var uncheckedValue = unmarshalled.Value
-
-		if uncheckedValue == nil {
-			uncheckedValue = unmarshalled.getFromInnerBody("value")
-		}
-
-		if uncheckedValue != nil {
-			value, ok := uncheckedValue.(float64)
-			if !ok {
-				value, ok := uncheckedValue.(string)
-				if !ok {
-					notValidOperationsIds = append(notValidOperationsIds, InvalidOperation{Company: operation.Company, ID: operation.ID})
-					continue
-				} else {
-					v1, err := strconv.ParseFloat(value, 64)
-					if err != nil {
-						notValidOperationsIds = append(notValidOperationsIds, InvalidOperation{Company: operation.Company, ID: operation.ID})
-						continue
-					} else {
-						if v1 == float64(int(v1)) {
-							operation.Value = int(v1)
-						} else {
-							notValidOperationsIds = append(notValidOperationsIds, InvalidOperation{Company: operation.Company, ID: operation.ID})
-							continue
-						}
-					}
-				}
-			} else {
-				if value == float64(int(value)) {
-					operation.Value = int(value)
-				} else {
-					notValidOperationsIds = append(notValidOperationsIds, InvalidOperation{Company: operation.Company, ID: operation.ID})
-					continue
-				}
-			}
-		} else {
-			notValidOperationsIds = append(notValidOperationsIds, InvalidOperation{Company: operation.Company, ID: operation.ID})
-			continue
-		}
-
-		operations = append(operations, operation)
 	}
-
-	return operations, notValidOperationsIds
+	return operations, invalidOperations
 }
 
 type Billing struct {
@@ -218,21 +248,7 @@ type Billing struct {
 	InvalidOperations    []interface{} `json:"invalid_operations,omitempty"`
 }
 
-func main() {
-	data, err := getFileData()
-	if err != nil {
-		fmt.Println(err)
-		os.Exit(0)
-	}
-
-	var unmarshalledOperations []UnmarshalledOperation
-
-	if err := json.Unmarshal(data, &unmarshalledOperations); err != nil {
-		panic(err)
-	}
-
-	operations, invalidOperations := unmarshalledToValid(unmarshalledOperations)
-
+func billingsFromOperations(operations []Operation, invalidOperations []InvalidOperation) []Billing {
 	var billings []Billing
 
 	for _, operation := range operations {
@@ -267,6 +283,26 @@ func main() {
 			}
 		}
 	}
+
+	return billings
+}
+
+func main() {
+	data, err := getFileData()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(0)
+	}
+
+	var rawOperations []RawOperation
+
+	if err := json.Unmarshal(data, &rawOperations); err != nil {
+		panic(err)
+	}
+
+	operations, invalidOperations := rawOperationsToValid(rawOperations)
+
+	billings := billingsFromOperations(operations, invalidOperations)
 
 	file, _ := json.MarshalIndent(billings, "", "\t")
 
