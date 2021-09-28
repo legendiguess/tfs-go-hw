@@ -23,31 +23,42 @@ func getPathFromEnv() string {
 	return os.Getenv("FILE")
 }
 
-func getPathFromStdin() string {
-	fmt.Println("Enter path to .json file with operations:")
-	var path string
-	fmt.Scan(&path)
-	return path
+func getDataFromFilePath(filepath string) ([]byte, bool) {
+	file, err := os.Open(filepath)
+
+	if err != nil {
+		return nil, false
+	}
+
+	data, err := ioutil.ReadAll(file)
+	if err != nil {
+		return nil, false
+	}
+
+	file.Close()
+	return data, true
 }
 
-func getFileData() ([]byte, error) {
-	inputs := []func() string{getPathFromFlag, getPathFromEnv, getPathFromStdin}
+func getDataFromInputs() ([]byte, error) {
+	data, ok := getDataFromFilePath(getPathFromFlag())
 
-	currentInputIndex := 0
-
-	for {
-		file, err := os.Open(inputs[currentInputIndex]())
-		if err != nil {
-			currentInputIndex++
-			if currentInputIndex == len(inputs) {
-				return nil, errors.New("none of inputs contains legit file path")
-			}
-			continue
-		}
-		data, err := ioutil.ReadAll(file)
-		file.Close()
-		return data, err
+	if ok {
+		return data, nil
 	}
+
+	data, ok = getDataFromFilePath(getPathFromEnv())
+
+	if ok {
+		return data, nil
+	}
+
+	data, err := ioutil.ReadAll(os.Stdin)
+
+	if err == nil {
+		return data, nil
+	}
+
+	return nil, errors.New("none of the inputs are correct")
 }
 
 type OperationType int
@@ -288,7 +299,7 @@ func billingsFromOperations(operations []Operation, invalidOperations []InvalidO
 }
 
 func main() {
-	data, err := getFileData()
+	data, err := getDataFromInputs()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(0)
