@@ -68,54 +68,46 @@ const (
 	Outcome
 )
 
+type InnerBody struct {
+	Value     interface{}
+	ID        interface{}
+	Type      string
+	CreatedAt string `json:"created_at"`
+}
+
 type RawOperation struct {
 	Company   string
 	Type      string
 	Value     interface{}
 	ID        interface{}
-	CreatedAt string                 `json:"created_at"`
-	InnerBody map[string]interface{} `json:"operation"`
-}
-
-func (rawOperation RawOperation) getFromInnerBody(fieldName string) interface{} {
-	if len(rawOperation.InnerBody) > 0 {
-		if val, ok := rawOperation.InnerBody[fieldName]; ok {
-			return val
-		}
-	}
-	return nil
+	CreatedAt string    `json:"created_at"`
+	InnerBody InnerBody `json:"operation"`
 }
 
 func (rawOperation RawOperation) getValue() interface{} {
 	if rawOperation.Value == nil {
-		return rawOperation.getFromInnerBody("value")
+		return rawOperation.InnerBody.Value
 	}
 	return rawOperation.Value
 }
 
 func (rawOperation RawOperation) getID() interface{} {
 	if rawOperation.ID == nil {
-		return rawOperation.getFromInnerBody("id")
+		return rawOperation.InnerBody.ID
 	}
 	return rawOperation.ID
 }
 
 func (rawOperation RawOperation) getType() string {
 	if rawOperation.Type == "" {
-		var typeFromInner = rawOperation.getFromInnerBody("type")
-		if typeFromInner != nil {
-			return typeFromInner.(string)
-		}
+		return rawOperation.InnerBody.Type
 	}
 	return rawOperation.Type
 }
 
 func (rawOperation RawOperation) getCreatedAt() string {
 	if rawOperation.CreatedAt == "" {
-		var createdAt = rawOperation.getFromInnerBody("created_at")
-		if createdAt != nil {
-			return createdAt.(string)
-		}
+		return rawOperation.InnerBody.CreatedAt
 	}
 	return rawOperation.CreatedAt
 }
