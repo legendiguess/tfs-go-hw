@@ -146,37 +146,34 @@ type InnerBody struct {
 
 type RawOperation struct {
 	Company   string
-	Type      OperationType
-	Value     Value
-	ID        interface{}
-	CreatedAt Time      `json:"created_at"`
-	InnerBody InnerBody `json:"operation"`
+	Operation InnerBody
+	InnerBody
 }
 
 func (rawOperation RawOperation) getValue() Value {
 	if rawOperation.Value == InvalidValue {
-		return rawOperation.InnerBody.Value
+		return rawOperation.Operation.Value
 	}
 	return rawOperation.Value
 }
 
 func (rawOperation RawOperation) getID() interface{} {
 	if rawOperation.ID == nil {
-		return rawOperation.InnerBody.ID
+		return rawOperation.Operation.ID
 	}
 	return rawOperation.ID
 }
 
 func (rawOperation RawOperation) getType() OperationType {
 	if rawOperation.Type == InvalidType {
-		return rawOperation.InnerBody.Type
+		return rawOperation.Operation.Type
 	}
 	return rawOperation.Type
 }
 
 func (rawOperation RawOperation) getCreatedAt() Time {
 	if rawOperation.CreatedAt.Time.IsZero() {
-		return rawOperation.InnerBody.CreatedAt
+		return rawOperation.Operation.CreatedAt
 	}
 	return rawOperation.CreatedAt
 }
