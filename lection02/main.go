@@ -64,28 +64,97 @@ func getDataFromInputs() ([]byte, error) {
 type OperationType int
 
 const (
-	Income = iota
-	Outcome
+	InvalidType = OperationType(iota)
+	IncomeType
+	OutcomeType
 )
 
+func (opType *OperationType) UnmarshalJSON(data []byte) error {
+	var input string
+	if err := json.Unmarshal(data, &input); err != nil {
+		return err
+	}
+
+	switch input {
+	case "income", "+":
+		*opType = IncomeType
+	case "outcome", "-":
+		*opType = OutcomeType
+	default:
+		*opType = InvalidType
+	}
+
+	return nil
+}
+
+type Time struct {
+	time.Time
+}
+
+func (t *Time) UnmarshalJSON(data []byte) error {
+	var input string
+	if err := json.Unmarshal(data, &input); err != nil {
+		return err
+	}
+
+	if input != "" {
+		parsedTime, _ := time.Parse(time.RFC3339, input)
+		t.Time = parsedTime
+	}
+
+	return nil
+}
+
+type Value int
+
+const (
+	InvalidValue = Value(0)
+)
+
+func (v *Value) UnmarshalJSON(data []byte) error {
+	var input interface{}
+	if err := json.Unmarshal(data, &input); err != nil {
+		return err
+	}
+
+	if input != nil {
+		value, ok := input.(float64)
+		if !ok {
+			str, ok := input.(string)
+			if !ok {
+				return nil
+			}
+			var err error
+			value, err = strconv.ParseFloat(str, 64)
+			if err != nil {
+				return nil
+			}
+		}
+		if floatIsInteger(value) {
+			*v = Value(int(value))
+		}
+	}
+	return nil
+}
+
 type InnerBody struct {
-	Value     interface{}
+	Value     Value
 	ID        interface{}
-	Type      string
-	CreatedAt string `json:"created_at"`
+	Type      OperationType
+	CreatedAt Time `json:"created_at"`
 }
 
 type RawOperation struct {
 	Company   string
-	Type      string
-	Value     interface{}
+	Type      OperationType
+	Value     Value
 	ID        interface{}
-	CreatedAt string    `json:"created_at"`
+	CreatedAt Time      `json:"created_at"`
 	InnerBody InnerBody `json:"operation"`
 }
 
-func (rawOperation RawOperation) getValue() interface{} {
-	if rawOperation.Value == nil {
+func (rawOperation RawOperation) getValue() Value {
+	if rawOperation.Value == InvalidValue {
 		return rawOperation.InnerBody.Value
 	}
 	return rawOperation.Value
@@ -98,26 +167,24 @@ func (rawOperation RawOperation) getID() interface{} {
 	return rawOperation.ID
 }
 
-func (rawOperation RawOperation) getType() string {
-	if rawOperation.Type == "" {
+func (rawOperation RawOperation) getType() OperationType {
+	if rawOperation.Type == InvalidType {
 		return rawOperation.InnerBody.Type
 	}
 	return rawOperation.Type
 }
 
-func (rawOperation RawOperation) getCreatedAt() string {
-	if rawOperation.CreatedAt == "" {
+func (rawOperation RawOperation) getCreatedAt() Time {
+	if rawOperation.CreatedAt.Time.IsZero() {
 		return rawOperation.InnerBody.CreatedAt
 	}
 	return rawOperation.CreatedAt
 }
 
 type Operation struct {
-	Company   string
-	Type      OperationType
-	Value     int
-	ID        interface{}
-	CreatedAt time.Time
+	Company string
+	ID      interface{}
+	InnerBody
 }
 
 type OperationStatus int
@@ -150,43 +217,6 @@ func rawIDToValid(value interface{}) (interface{}, bool) {
 	return nil, false
 }
 
-func rawTimeToValid(input string) (time.Time, bool) {
-	if input != "" {
-		t, err := time.Parse(time.RFC3339, input)
-		return t, err == nil
-	}
-	return time.Time{}, false
-}
-
-func rawValueToValid(input interface{}) (int, bool) {
-	if input != nil {
-		value, ok := input.(float64)
-		if !ok {
-			str, ok := input.(string)
-			if !ok {
-				return 0, false
-			}
-			var err error
-			value, err = strconv.ParseFloat(str, 64)
-			if err != nil {
-				return 0, false
-			}
-		}
-		return int(value), floatIsInteger(value)
-	}
-	return 0, false
-}
-
-func rawTypeToValid(input string) (OperationType, bool) {
-	switch input {
-	case "income", "+":
-		return Income, true
-	case "outcome", "-":
-		return Outcome, true
-	}
-	return OperationType(-1), false
-}
-
 func newOperationFromRaw(rawOperation RawOperation) (*Operation, OperationStatus) {
 	var operation = Operation{}
 
@@ -202,20 +232,20 @@ func newOperationFromRaw(rawOperation RawOperation) (*Operation, OperationStatus
 	}
 	operation.ID = id
 
-	time, ok := rawTimeToValid(rawOperation.getCreatedAt())
-	if !ok {
+	rawTime := rawOperation.getCreatedAt()
+	if rawTime.Time.IsZero() {
 		return nil, Skip
 	}
-	operation.CreatedAt = time
+	operation.CreatedAt = rawTime
 
-	mType, ok := rawTypeToValid(rawOperation.getType())
-	if !ok {
+	mType := rawOperation.getType()
+	if mType == InvalidType {
 		return &operation, Invalid
 	}
 	operation.Type = mType
 
-	value, ok := rawValueToValid(rawOperation.getValue())
-	if !ok {
+	value := rawOperation.getValue()
+	if value == InvalidValue {
 		return &operation, Invalid
 	}
 	operation.Value = value
@@ -271,10 +301,11 @@ func billingsFromOperations(operations []Operation, invalidOperations []InvalidO
 		}
 
 		billings[billingIndex].ValidOperationsCount++
-		if operation.Type == Income {
-			billings[billingIndex].Balance += operation.Value
+		intValue := int(operation.Value)
+		if operation.Type == IncomeType {
+			billings[billingIndex].Balance += intValue
 		} else {
-			billings[billingIndex].Balance -= operation.Value
+			billings[billingIndex].Balance -= intValue
 		}
 	}
 
