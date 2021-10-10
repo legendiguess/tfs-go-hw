@@ -30,16 +30,30 @@ func main() {
 
 	logger.Info("start prices generator...")
 	prices := pg.Prices(ctx)
-	wg.Add(3)
+	wg.Add(4)
 	candles1m := candles1mFromPrice(ctx, prices, &wg)
 	candles2m := candlesFromCandles(ctx, domain.CandlePeriod2m, candles1m, &wg)
-	candlesFromCandles(ctx, domain.CandlePeriod10m, candles2m, &wg)
+	candles10m := candlesFromCandles(ctx, domain.CandlePeriod10m, candles2m, &wg)
+	freeChannel(ctx, candles10m, &wg)
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	<-done
 	cancel()
 	wg.Wait()
+}
+
+// Функция нужна чтобы очищать канал десяти-периодных свечей иначе получим дедлок
+func freeChannel(ctx context.Context, candles <-chan domain.Candle, wg *sync.WaitGroup) {
+	go func(ctx context.Context) {
+		defer wg.Done()
+		for {
+			_, ok := <-candles
+			if !ok {
+				return
+			}
+		}
+	}(ctx)
 }
 
 func writeToCsv(candle domain.Candle) {
@@ -111,7 +125,7 @@ func isEqualPeriod(firstTS time.Time, secondTS time.Time, period domain.CandlePe
 	return firstPeriod == secondPeriod
 }
 
-func candlesFromCandles(ctx context.Context, period domain.CandlePeriod, candles1m <-chan domain.Candle, wg *sync.WaitGroup) <-chan domain.Candle {
+func candlesFromCandles(ctx context.Context, period domain.CandlePeriod, candlesNth <-chan domain.Candle, wg *sync.WaitGroup) <-chan domain.Candle {
 	var candles = make(map[string]domain.Candle)
 
 	output := make(chan domain.Candle)
@@ -119,7 +133,7 @@ func candlesFromCandles(ctx context.Context, period domain.CandlePeriod, candles
 		defer close(output)
 		defer wg.Done()
 		for {
-			newCandle, ok := <-candles1m
+			newCandle, ok := <-candlesNth
 			if !ok {
 				for _, candle := range candles {
 					writeToCsv(candle)
