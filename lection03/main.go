@@ -31,13 +31,13 @@ func main() {
 	logger.Info("start prices generator...")
 	prices := pg.Prices(ctx)
 	wg.Add(7)
-	candles1m := candles1mFromPrice(ctx, prices, &wg)
-	candles1m = writeCandlesToCSV(ctx, candles1m, &wg)
-	candles2m := candlesFromCandles(ctx, domain.CandlePeriod2m, candles1m, &wg)
-	candles2m = writeCandlesToCSV(ctx, candles2m, &wg)
-	candles10m := candlesFromCandles(ctx, domain.CandlePeriod10m, candles2m, &wg)
-	candles10m = writeCandlesToCSV(ctx, candles10m, &wg)
-	freeChannel(ctx, candles10m, &wg)
+	candles1m := candles1mFromPrice(prices, &wg)
+	candles1m = writeCandlesToCSV(candles1m, &wg)
+	candles2m := candlesFromCandles(domain.CandlePeriod2m, candles1m, &wg)
+	candles2m = writeCandlesToCSV(candles2m, &wg)
+	candles10m := candlesFromCandles(domain.CandlePeriod10m, candles2m, &wg)
+	candles10m = writeCandlesToCSV(candles10m, &wg)
+	freeChannel(candles10m, &wg)
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
@@ -47,8 +47,8 @@ func main() {
 }
 
 // Функция нужна чтобы очищать канал десяти-периодных свечей иначе получим дедлок
-func freeChannel(ctx context.Context, candles <-chan domain.Candle, wg *sync.WaitGroup) {
-	go func(ctx context.Context) {
+func freeChannel(candles <-chan domain.Candle, wg *sync.WaitGroup) {
+	go func() {
 		defer wg.Done()
 		for {
 			_, ok := <-candles
@@ -56,7 +56,7 @@ func freeChannel(ctx context.Context, candles <-chan domain.Candle, wg *sync.Wai
 				return
 			}
 		}
-	}(ctx)
+	}()
 }
 
 func writeToCsv(candle domain.Candle) {
@@ -72,16 +72,16 @@ func writeToCsv(candle domain.Candle) {
 	}
 }
 
-func writeCandlesToCSV(ctx context.Context, candles <-chan domain.Candle, wg *sync.WaitGroup) <-chan domain.Candle {
+func writeCandlesToCSV(candles <-chan domain.Candle, wg *sync.WaitGroup) <-chan domain.Candle {
 	output := make(chan domain.Candle)
-	go func(ctx context.Context) {
+	go func() {
 		defer close(output)
 		defer wg.Done()
 		for candle := range candles {
 			writeToCsv(candle)
 			output <- candle
 		}
-	}(ctx)
+	}()
 
 	return output
 }
@@ -98,39 +98,31 @@ func newCandleByPrice(price domain.Price, period domain.CandlePeriod) domain.Can
 	}
 }
 
-func candles1mFromPrice(ctx context.Context, prices <-chan domain.Price, wg *sync.WaitGroup) <-chan domain.Candle {
+func candles1mFromPrice(prices <-chan domain.Price, wg *sync.WaitGroup) <-chan domain.Candle {
 	var candles = make(map[string]domain.Candle)
 
 	output := make(chan domain.Candle)
-	go func(ctx context.Context) {
+	go func() {
 		defer close(output)
 		defer wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case price, ok := <-prices:
-				if !ok {
+		for price := range prices {
+			if candle, ok := candles[price.Ticker]; ok {
+				if isEqualPeriod(candle.TS, price.TS, domain.CandlePeriod1m) {
+					if price.Value > candles[price.Ticker].High {
+						candle.High = price.Value
+					}
+					if price.Value < candles[price.Ticker].Low {
+						candle.Low = price.Value
+					}
+					candle.Close = price.Value
+					candles[price.Ticker] = candle
 					continue
 				}
-				if candle, ok := candles[price.Ticker]; ok {
-					if isEqualPeriod(candle.TS, price.TS, domain.CandlePeriod1m) {
-						if price.Value > candles[price.Ticker].High {
-							candle.High = price.Value
-						}
-						if price.Value < candles[price.Ticker].Low {
-							candle.Low = price.Value
-						}
-						candle.Close = price.Value
-						candles[price.Ticker] = candle
-						continue
-					}
-					output <- candle
-				}
-				candles[price.Ticker] = newCandleByPrice(price, domain.CandlePeriod1m)
+				output <- candle
 			}
+			candles[price.Ticker] = newCandleByPrice(price, domain.CandlePeriod1m)
 		}
-	}(ctx)
+	}()
 
 	return output
 }
@@ -141,11 +133,11 @@ func isEqualPeriod(firstTS time.Time, secondTS time.Time, period domain.CandlePe
 	return firstPeriod == secondPeriod
 }
 
-func candlesFromCandles(ctx context.Context, period domain.CandlePeriod, candlesNth <-chan domain.Candle, wg *sync.WaitGroup) <-chan domain.Candle {
+func candlesFromCandles(period domain.CandlePeriod, candlesNth <-chan domain.Candle, wg *sync.WaitGroup) <-chan domain.Candle {
 	var candles = make(map[string]domain.Candle)
 
 	output := make(chan domain.Candle)
-	go func(ctx context.Context) {
+	go func() {
 		defer close(output)
 		defer wg.Done()
 		for {
@@ -173,7 +165,7 @@ func candlesFromCandles(ctx context.Context, period domain.CandlePeriod, candles
 			newCandle.Period = period
 			candles[newCandle.Ticker] = newCandle
 		}
-	}(ctx)
+	}()
 
 	return output
 }
