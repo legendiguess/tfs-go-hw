@@ -30,10 +30,13 @@ func main() {
 
 	logger.Info("start prices generator...")
 	prices := pg.Prices(ctx)
-	wg.Add(4)
+	wg.Add(7)
 	candles1m := candles1mFromPrice(ctx, prices, &wg)
+	candles1m = writeCandlesToCSV(ctx, candles1m, &wg)
 	candles2m := candlesFromCandles(ctx, domain.CandlePeriod2m, candles1m, &wg)
+	candles2m = writeCandlesToCSV(ctx, candles2m, &wg)
 	candles10m := candlesFromCandles(ctx, domain.CandlePeriod10m, candles2m, &wg)
+	candles10m = writeCandlesToCSV(ctx, candles10m, &wg)
 	freeChannel(ctx, candles10m, &wg)
 
 	done := make(chan os.Signal, 1)
@@ -67,6 +70,20 @@ func writeToCsv(candle domain.Candle) {
 	if _, err = f.WriteString(fmt.Sprintf("%s,%s,%f,%f,%f,%f\n", candle.Ticker, candle.TS.Format(time.RFC3339), candle.Open, candle.High, candle.Low, candle.Close)); err != nil {
 		panic(err)
 	}
+}
+
+func writeCandlesToCSV(ctx context.Context, candles <-chan domain.Candle, wg *sync.WaitGroup) <-chan domain.Candle {
+	output := make(chan domain.Candle)
+	go func(ctx context.Context) {
+		defer close(output)
+		defer wg.Done()
+		for candle := range candles {
+			writeToCsv(candle)
+			output <- candle
+		}
+	}(ctx)
+
+	return output
 }
 
 func newCandleByPrice(price domain.Price, period domain.CandlePeriod) domain.Candle {
@@ -108,7 +125,6 @@ func candles1mFromPrice(ctx context.Context, prices <-chan domain.Price, wg *syn
 						candles[price.Ticker] = candle
 						continue
 					}
-					writeToCsv(candle)
 					output <- candle
 				}
 				candles[price.Ticker] = newCandleByPrice(price, domain.CandlePeriod1m)
@@ -136,7 +152,6 @@ func candlesFromCandles(ctx context.Context, period domain.CandlePeriod, candles
 			newCandle, ok := <-candlesNth
 			if !ok {
 				for _, candle := range candles {
-					writeToCsv(candle)
 					output <- candle
 				}
 				return
@@ -153,7 +168,6 @@ func candlesFromCandles(ctx context.Context, period domain.CandlePeriod, candles
 					candles[candle.Ticker] = candle
 					continue
 				}
-				writeToCsv(candle)
 				output <- candle
 			}
 			newCandle.Period = period
