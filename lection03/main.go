@@ -50,11 +50,7 @@ func main() {
 func freeChannel(candles <-chan domain.Candle, wg *sync.WaitGroup) {
 	go func() {
 		defer wg.Done()
-		for {
-			_, ok := <-candles
-			if !ok {
-				return
-			}
+		for range candles {
 		}
 	}()
 }
@@ -140,14 +136,7 @@ func candlesFromCandles(period domain.CandlePeriod, candlesNth <-chan domain.Can
 	go func() {
 		defer close(output)
 		defer wg.Done()
-		for {
-			newCandle, ok := <-candlesNth
-			if !ok {
-				for _, candle := range candles {
-					output <- candle
-				}
-				return
-			}
+		for newCandle := range candlesNth {
 			if candle, ok := candles[newCandle.Ticker]; ok {
 				if isEqualPeriod(candle.TS, newCandle.TS, period) {
 					if candle.High < newCandle.High {
@@ -164,6 +153,9 @@ func candlesFromCandles(period domain.CandlePeriod, candlesNth <-chan domain.Can
 			}
 			newCandle.Period = period
 			candles[newCandle.Ticker] = newCandle
+		}
+		for _, candle := range candles {
+			output <- candle
 		}
 	}()
 
