@@ -118,6 +118,9 @@ func candles1mFromPrice(prices <-chan domain.Price, wg *sync.WaitGroup) <-chan d
 			}
 			candles[price.Ticker] = newCandleByPrice(price, domain.CandlePeriod1m)
 		}
+		for _, candle := range candles {
+			output <- candle
+		}
 	}()
 
 	return output
