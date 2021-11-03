@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -53,32 +54,14 @@ func (privateChats *PrivateChats) append(firstUserID string, secondUserID string
 	*privateChats = append(*privateChats, PrivateChat{FirstUserID: firstUserID, SecondUserID: secondUserID, Messages: Messages{}})
 }
 
-var storageUsers map[string]string
-var globalChat GlobalChat
-var privateChats PrivateChats
-
-func main() {
-	storageUsers = make(map[string]string)
-
-	root := chi.NewRouter()
-	root.Use(middleware.Logger)
-	root.Post("/login", Login)
-	root.Post("/registration", Registration)
-
-	r := chi.NewRouter()
-	r.Use(Auth)
-	r.Get("/global", GlobalGetMessages)
-	r.Post("/global", GlobalSendMessage)
-
-	r.Get("/private/{userID}", PrivateGetMessages)
-	r.Post("/private/{userID}", PrivateSendMessage)
-
-	root.Mount("/", r)
-
-	log.Fatal(http.ListenAndServe(":5000", root))
+type System struct {
+	mutex        sync.Mutex
+	storageUsers map[string]string
+	globalChat   GlobalChat
+	privateChats PrivateChats
 }
 
-func PrivateGetMessages(w http.ResponseWriter, r *http.Request) {
+func (system *System) PrivateGetMessages(w http.ResponseWriter, r *http.Request) {
 	senderID, ok := r.Context().Value(userID).(string)
 	if !ok {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -90,19 +73,21 @@ func PrivateGetMessages(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if _, ok := storageUsers[sendToID]; !ok {
+	system.mutex.Lock()
+	defer system.mutex.Unlock()
+	if _, ok := system.storageUsers[sendToID]; !ok {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 
-	chatID, ok := privateChats.findChat(senderID, sendToID)
+	chatID, ok := system.privateChats.findChat(senderID, sendToID)
 
 	if !ok {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	bytes, err := json.Marshal(privateChats[chatID].Messages)
+	bytes, err := json.Marshal(system.privateChats[chatID].Messages)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -111,7 +96,7 @@ func PrivateGetMessages(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(bytes)
 }
 
-func PrivateSendMessage(w http.ResponseWriter, r *http.Request) {
+func (system *System) PrivateSendMessage(w http.ResponseWriter, r *http.Request) {
 	senderID, ok := r.Context().Value(userID).(string)
 	if !ok {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -123,7 +108,8 @@ func PrivateSendMessage(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if _, ok := storageUsers[sendToID]; !ok {
+	system.mutex.Lock()
+	if _, ok := system.storageUsers[sendToID]; !ok {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -142,22 +128,22 @@ func PrivateSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chatID, ok := privateChats.findChat(senderID, sendToID)
+	chatID, ok := system.privateChats.findChat(senderID, sendToID)
 
-	println(ok)
 	if !ok {
-		privateChats.append(senderID, sendToID, Message{UserID: senderID, Text: rawMessage.Text})
+		system.privateChats.append(senderID, sendToID, Message{UserID: senderID, Text: rawMessage.Text})
 		return
 	}
 
-	privateChats[chatID].Messages.append(senderID, rawMessage.Text)
+	system.privateChats[chatID].Messages.append(senderID, rawMessage.Text)
+	system.mutex.Unlock()
 }
 
 type RawMessage struct {
 	Text string
 }
 
-func GlobalSendMessage(w http.ResponseWriter, r *http.Request) {
+func (system *System) GlobalSendMessage(w http.ResponseWriter, r *http.Request) {
 	id, ok := r.Context().Value(userID).(string)
 	if !ok {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -176,12 +162,16 @@ func GlobalSendMessage(w http.ResponseWriter, r *http.Request) {
 	if err != nil || rawMessage.Text == "" {
 		w.WriteHeader(http.StatusBadRequest)
 	} else {
-		globalChat.Messages.append(id, rawMessage.Text)
+		system.mutex.Lock()
+		system.globalChat.Messages.append(id, rawMessage.Text)
+		system.mutex.Unlock()
 	}
 }
 
-func GlobalGetMessages(w http.ResponseWriter, r *http.Request) {
-	bytes, err := json.Marshal(globalChat.Messages)
+func (system *System) GlobalGetMessages(w http.ResponseWriter, r *http.Request) {
+	system.mutex.Lock()
+	bytes, err := json.Marshal(system.globalChat.Messages)
+	system.mutex.Unlock()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -194,7 +184,7 @@ type User struct {
 	Login string
 }
 
-func Registration(w http.ResponseWriter, r *http.Request) {
+func (system *System) Registration(w http.ResponseWriter, r *http.Request) {
 	d, err := io.ReadAll(r.Body)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -207,10 +197,11 @@ func Registration(w http.ResponseWriter, r *http.Request) {
 	if err != nil || user.Login == "" {
 		w.WriteHeader(http.StatusBadRequest)
 	} else {
-		if _, ok := storageUsers[user.Login]; ok { // Пользователь уже зарегистрирован
+		system.mutex.Lock()
+		if _, ok := system.storageUsers[user.Login]; ok { // Пользователь уже зарегистрирован
 			w.WriteHeader(http.StatusConflict)
 		} else {
-			storageUsers[user.Login] = ""
+			system.storageUsers[user.Login] = ""
 
 			c := &http.Cookie{
 				Name:  cookieAuth,
@@ -219,10 +210,11 @@ func Registration(w http.ResponseWriter, r *http.Request) {
 			}
 			http.SetCookie(w, c)
 		}
+		system.mutex.Unlock()
 	}
 }
 
-func Login(w http.ResponseWriter, r *http.Request) {
+func (system *System) Login(w http.ResponseWriter, r *http.Request) {
 	d, err := io.ReadAll(r.Body)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -235,7 +227,8 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	if err != nil || user.Login == "" {
 		w.WriteHeader(http.StatusBadRequest)
 	} else {
-		if _, ok := storageUsers[user.Login]; ok {
+		system.mutex.Lock()
+		if _, ok := system.storageUsers[user.Login]; ok {
 			c := &http.Cookie{
 				Name:  cookieAuth,
 				Value: user.Login,
@@ -245,6 +238,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusUnauthorized)
 		}
+		system.mutex.Unlock()
 	}
 }
 
@@ -270,4 +264,37 @@ func Auth(handler http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(fn)
+}
+
+func (system *System) Routes() chi.Router {
+	root := chi.NewRouter()
+	root.Use(middleware.Logger)
+	root.Post("/login", system.Login)
+	root.Post("/registration", system.Registration)
+
+	r := chi.NewRouter()
+	r.Use(Auth)
+	r.Get("/global", system.GlobalGetMessages)
+	r.Post("/global", system.GlobalSendMessage)
+
+	r.Get("/private/{userID}", system.PrivateGetMessages)
+	r.Post("/private/{userID}", system.PrivateSendMessage)
+
+	root.Mount("/", r)
+
+	return root
+}
+
+func main() {
+	system := System{
+		mutex:        sync.Mutex{},
+		storageUsers: make(map[string]string),
+		globalChat:   GlobalChat{},
+		privateChats: PrivateChats{},
+	}
+
+	root := chi.NewRouter()
+	root.Mount("/", system.Routes())
+
+	log.Fatal(http.ListenAndServe(":5000", root))
 }
