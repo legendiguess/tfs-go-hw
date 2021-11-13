@@ -30,6 +30,24 @@ func (messages *Messages) append(userID string, text string) {
 
 type GlobalChat struct {
 	Messages Messages
+	mutex    sync.Mutex
+}
+
+func (globalChat *GlobalChat) getMessages() Messages {
+	globalChat.mutex.Lock()
+	defer globalChat.mutex.Unlock()
+
+	copyOfArray := make(Messages, len(globalChat.Messages))
+	copy(copyOfArray, globalChat.Messages)
+
+	return copyOfArray
+}
+
+func (globalChat *GlobalChat) newMessage(userID string, text string) {
+	globalChat.mutex.Lock()
+	defer globalChat.mutex.Unlock()
+
+	globalChat.Messages.append(userID, text)
 }
 
 type PrivateChat struct {
@@ -38,10 +56,16 @@ type PrivateChat struct {
 	Messages     Messages
 }
 
-type PrivateChats []PrivateChat
+type PrivateChats struct {
+	storage []PrivateChat
+	mutex   sync.Mutex
+}
 
 func (privateChats *PrivateChats) findChat(firstUserID string, secondUserID string) (int, bool) {
-	for index, chat := range *privateChats {
+	privateChats.mutex.Lock()
+	defer privateChats.mutex.Unlock()
+
+	for index, chat := range privateChats.storage {
 		if (chat.FirstUserID == firstUserID && chat.SecondUserID == secondUserID) || (chat.FirstUserID == secondUserID && chat.SecondUserID == firstUserID) {
 			return index, true
 		}
@@ -49,14 +73,57 @@ func (privateChats *PrivateChats) findChat(firstUserID string, secondUserID stri
 	return 0, false
 }
 
-// Создает новый приватный чат с одним сообщением
-func (privateChats *PrivateChats) append(firstUserID string, secondUserID string, message Message) {
-	*privateChats = append(*privateChats, PrivateChat{FirstUserID: firstUserID, SecondUserID: secondUserID, Messages: Messages{}})
+// Создает новый приватный чат и возвращает его индекс
+func (privateChats *PrivateChats) newChat(firstUserID string, secondUserID string) int {
+	privateChats.mutex.Lock()
+	defer privateChats.mutex.Unlock()
+
+	privateChats.storage = append(privateChats.storage, PrivateChat{FirstUserID: firstUserID, SecondUserID: secondUserID, Messages: Messages{}})
+
+	return len(privateChats.storage) - 1
+}
+
+func (privateChats *PrivateChats) getMessages(chatIndex int) Messages {
+	privateChats.mutex.Lock()
+	defer privateChats.mutex.Unlock()
+
+	copyOfArray := make(Messages, len(privateChats.storage[chatIndex].Messages))
+	copy(copyOfArray, privateChats.storage[chatIndex].Messages)
+
+	return copyOfArray
+
+}
+
+func (privateChats *PrivateChats) newMessage(chatIndex int, senderID string, text string) {
+	privateChats.mutex.Lock()
+	defer privateChats.mutex.Unlock()
+
+	privateChats.storage[chatIndex].Messages.append(senderID, text)
+}
+
+type Users struct {
+	mutex   sync.Mutex
+	storage map[string]string
+}
+
+func (users *Users) checkIsUserExist(userID string) bool {
+	users.mutex.Lock()
+	defer users.mutex.Unlock()
+
+	_, ok := users.storage[userID]
+
+	return ok
+}
+
+func (users *Users) newUser(userID string) {
+	users.mutex.Lock()
+	defer users.mutex.Unlock()
+
+	users.storage[userID] = ""
 }
 
 type System struct {
-	mutex        sync.Mutex
-	storageUsers map[string]string
+	users        Users
 	globalChat   GlobalChat
 	privateChats PrivateChats
 }
@@ -73,9 +140,10 @@ func (system *System) PrivateGetMessages(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	system.mutex.Lock()
-	defer system.mutex.Unlock()
-	if _, ok := system.storageUsers[sendToID]; !ok {
+
+	is_user_exists := system.users.checkIsUserExist(sendToID)
+
+	if !is_user_exists {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -87,7 +155,7 @@ func (system *System) PrivateGetMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	bytes, err := json.Marshal(system.privateChats[chatID].Messages)
+	bytes, err := json.Marshal(system.privateChats.getMessages(chatID))
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -108,8 +176,10 @@ func (system *System) PrivateSendMessage(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	system.mutex.Lock()
-	if _, ok := system.storageUsers[sendToID]; !ok {
+
+	is_user_exists := system.users.checkIsUserExist(sendToID)
+
+	if !is_user_exists {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -128,15 +198,14 @@ func (system *System) PrivateSendMessage(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	chatID, ok := system.privateChats.findChat(senderID, sendToID)
+	chatIndex, ok := system.privateChats.findChat(senderID, sendToID)
 
 	if !ok {
-		system.privateChats.append(senderID, sendToID, Message{UserID: senderID, Text: rawMessage.Text})
+		chatIndex = system.privateChats.newChat(senderID, sendToID)
 		return
 	}
 
-	system.privateChats[chatID].Messages.append(senderID, rawMessage.Text)
-	system.mutex.Unlock()
+	system.privateChats.newMessage(chatIndex, senderID, rawMessage.Text)
 }
 
 type RawMessage struct {
@@ -162,16 +231,15 @@ func (system *System) GlobalSendMessage(w http.ResponseWriter, r *http.Request) 
 	if err != nil || rawMessage.Text == "" {
 		w.WriteHeader(http.StatusBadRequest)
 	} else {
-		system.mutex.Lock()
-		system.globalChat.Messages.append(id, rawMessage.Text)
-		system.mutex.Unlock()
+		system.globalChat.newMessage(id, rawMessage.Text)
 	}
 }
 
 func (system *System) GlobalGetMessages(w http.ResponseWriter, r *http.Request) {
-	system.mutex.Lock()
-	bytes, err := json.Marshal(system.globalChat.Messages)
-	system.mutex.Unlock()
+	messages := system.globalChat.getMessages()
+
+	bytes, err := json.Marshal(messages)
+
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -197,11 +265,12 @@ func (system *System) Registration(w http.ResponseWriter, r *http.Request) {
 	if err != nil || user.Login == "" {
 		w.WriteHeader(http.StatusBadRequest)
 	} else {
-		system.mutex.Lock()
-		if _, ok := system.storageUsers[user.Login]; ok { // Пользователь уже зарегистрирован
+		is_user_exists := system.users.checkIsUserExist(user.Login)
+
+		if is_user_exists {
 			w.WriteHeader(http.StatusConflict)
 		} else {
-			system.storageUsers[user.Login] = ""
+			system.users.newUser(user.Login)
 
 			c := &http.Cookie{
 				Name:  cookieAuth,
@@ -210,7 +279,6 @@ func (system *System) Registration(w http.ResponseWriter, r *http.Request) {
 			}
 			http.SetCookie(w, c)
 		}
-		system.mutex.Unlock()
 	}
 }
 
@@ -227,8 +295,9 @@ func (system *System) Login(w http.ResponseWriter, r *http.Request) {
 	if err != nil || user.Login == "" {
 		w.WriteHeader(http.StatusBadRequest)
 	} else {
-		system.mutex.Lock()
-		if _, ok := system.storageUsers[user.Login]; ok {
+		is_user_exists := system.users.checkIsUserExist(user.Login)
+
+		if is_user_exists {
 			c := &http.Cookie{
 				Name:  cookieAuth,
 				Value: user.Login,
@@ -238,7 +307,6 @@ func (system *System) Login(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusUnauthorized)
 		}
-		system.mutex.Unlock()
 	}
 }
 
@@ -287,11 +355,12 @@ func (system *System) Routes() chi.Router {
 
 func main() {
 	system := System{
-		mutex:        sync.Mutex{},
-		storageUsers: make(map[string]string),
+		users:        Users{},
 		globalChat:   GlobalChat{},
 		privateChats: PrivateChats{},
 	}
+
+	system.users.storage = make(map[string]string)
 
 	root := chi.NewRouter()
 	root.Mount("/", system.Routes())
