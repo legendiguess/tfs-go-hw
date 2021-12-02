@@ -53,6 +53,8 @@ func NewTelegramBot(usersService usersService, telegramBotCredentials telegramBo
 
 			if update.Message.Text == "/start" {
 				telegramBot.usersService.CheckAddUser(&domain.User{ChatID: update.Message.Chat.ID})
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Вы подписались на получение информации по ордерам 👍")
+				telegramBot.bot.Send(msg)
 			}
 		}
 	}()
@@ -61,7 +63,7 @@ func NewTelegramBot(usersService usersService, telegramBotCredentials telegramBo
 }
 
 func (telegramBot *TelegramBot) SendOrderInfo(chatID int64, orderInfo *domain.OrderInfo) {
-	template := "%s %s в количестве %d 🧾 по цене %s 💵 в %s ⏱"
+	template := "%s %s по цене %s 💵\n%s ⏱"
 
 	textSide := "Куплен ➕"
 	if orderInfo.Side == domain.OrderSideSell {
@@ -72,7 +74,7 @@ func (telegramBot *TelegramBot) SendOrderInfo(chatID int64, orderInfo *domain.Or
 	loc, _ := time.LoadLocation("Europe/Moscow")
 	t = t.In(loc)
 
-	text := fmt.Sprintf(template, textSide, strings.ToUpper(orderInfo.Symbol[3:6]), orderInfo.Quantity, strconv.FormatFloat(orderInfo.Price, 'f', -1, 64), t.Format(time.RFC1123))
+	text := fmt.Sprintf(template, textSide, strings.ToUpper(orderInfo.Symbol[3:6]), strconv.FormatFloat(orderInfo.Price, 'f', -1, 64), t.Format(time.RFC1123))
 
 	msg := tgbotapi.NewMessage(chatID, text)
 	telegramBot.bot.Send(msg)
